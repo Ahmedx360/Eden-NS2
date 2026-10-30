@@ -30,19 +30,10 @@ jobs:
       with:
         vulkan_version: latest
 
-    - name: Remove Broken Tests
-      shell: pwsh
-      run: |
-        # Bypasses the out-of-sync Turing MME test API mismatch errors
-        if (Test-Path "src/tests") {
-            Remove-Item -Recurse -Force "src/tests"
-            Write-Host "Successfully removed src/tests directory."
-        }
-
     - name: Configure CMake
       shell: pwsh
       run: |
-        cmake -S . -B build -G "Ninja" -DCMAKE_BUILD_TYPE=Release
+        cmake -S . -B build -G "Ninja" -DCMAKE_BUILD_TYPE=Release -DYUZU_TESTS=OFF
 
     - name: Build with Ninja
       shell: pwsh
