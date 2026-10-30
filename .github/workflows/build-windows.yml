@@ -25,6 +25,11 @@ jobs:
     - name: Install Ninja & CMake
       uses: lukka/get-cmake@latest
 
+    - name: Install Vulkan SDK
+      uses: jakoch/install-vulkan-sdk-action@v1
+      with:
+        vulkan_version: latest
+
     - name: Configure CMake
       shell: pwsh
       run: |
@@ -39,7 +44,6 @@ jobs:
       shell: pwsh
       run: |
         mkdir output_bin
-        # Adjust the path below if the executable places itself elsewhere inside build/bin
         Get-ChildItem -Path "build" -Recurse -Filter "eden.exe" | Copy-Item -Destination "output_bin"
 
     - name: Upload Build Artifacts
