@@ -2088,7 +2088,9 @@ inline LoweredProgram LowerToMaxwell(std::span<const Instruction> code,
             const u32 a = insn.Bits(24, 8), b = insn.Bits(32, 8);
             if ((insn.words[1] & ~0xffU) == 0x38000000) {
                 const bool offset = insn.Bits(76, 1);
-                if ((insn.words[2] & ~(0x04000000U | 0x1000U)) != 0x001e01ff ||
+                // Bit 87 is set on the .SCR forms (nvdisasm: TEX.SCR.B.LZ.NODEP RZ, R36, R36, R44, 2D, 0x1);
+                // they return the same single component, so it is accepted like the form without it.
+                if ((insn.words[2] & ~(0x04000000U | 0x1000U | 0x00800000U)) != 0x001e01ff ||
                     (a & 1) || a > 248 || b > (offset ? 252U : 253U) || dest > 247)
                     return fail(index, "native bindless 2D sample mode");
                 emit(0xde80000000000000ULL | predicate | dest | (u64{a} << 8) |
