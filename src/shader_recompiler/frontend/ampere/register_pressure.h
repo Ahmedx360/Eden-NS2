@@ -34,6 +34,14 @@ inline RegisterPressure PrepareRegisterPressure(const Instruction& input, u32 re
         operand(16); operand(24); operand(32); operand(64); break;
     case 0x819:
         operand(16); operand(24); operand(64); break;
+    case 0x224: case 0x210: // IMAD / IADD3, register sources.
+        operand(16); operand(24); operand(32); operand(64); break;
+    case 0x810: case 0xa10: case 0xc10: // IADD3, immediate / constant / uniform second source.
+        operand(16); operand(24); operand(64); break;
+    case 0x20c: // ISETP register sources (bits 16-23 hold predicates, not registers).
+        operand(24); operand(32); break;
+    case 0x80c: case 0xa0c: case 0xc0c:
+        operand(24); break;
     case 0x211:
         operand(16); operand(24); operand(32); operand(64); break;
     case 0xa11:
