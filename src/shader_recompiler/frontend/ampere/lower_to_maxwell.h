@@ -2036,11 +2036,16 @@ inline LoweredProgram LowerToMaxwell(std::span<const Instruction> code,
         case 0xfae: { // LDGSTS.E.BYPASS.128, completed synchronously with zero fill.
             const u32 global_address = insn.Bits(24, 8), shared_address = insn.Bits(16, 8);
             const u32 descriptor = insn.Bits(64, 6);
+            const u32 control = insn.words[2] & ~(0x03800000U | 0x7fU);
+            // 0x0c101c00: [R.64] with a uniform descriptor selector; 0x08101d00: plain [R.64], Pn
+            // (nvdisasm: LDGSTS.E.BYPASS.LTC128B.128 [Rs], [Ra.64], P3), where bit 90 inverts Pn.
+            const bool plain_form = control == 0x08101d00;
             if (native_predicate != 7 || (global_address & 1) || global_address + 2 > reserved_register ||
-                descriptor >= 63 || (descriptor & 1) || (insn.words[1] & 0xf000U) ||
-                (insn.words[2] & ~(0x03800000U | 0x7fU)) != 0x0c101c00)
+                (insn.words[1] & 0xf000U) || (control != 0x0c101c00 && !plain_form) ||
+                (!plain_form && (descriptor >= 63 || (descriptor & 1))))
                 return fail(index, "native global-to-shared copy mode");
-            const u32 enable = insn.Bits(87, 3) | (insn.Bits(70, 1) << 3);
+            const u32 enable = plain_form ? (insn.Bits(87, 3) | (insn.Bits(90, 1) << 3))
+                                          : (insn.Bits(87, 3) | (insn.Bits(70, 1) << 3));
             const u32 global_immediate = insn.words[1] & 0xfff;
             const s32 global_offset = static_cast<s32>(global_immediate) - (global_immediate & 0x800 ? 0x1000 : 0);
             const s32 shared_offset = static_cast<s32>(static_cast<s16>(insn.words[1] >> 16)) * 16;
