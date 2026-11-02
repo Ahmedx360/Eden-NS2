@@ -188,8 +188,15 @@ bool GenericEnvironment::HasNativeRegisterCopies() const {
     return native_source_size || Shader::Ampere::HasNativeAddressMap(code);
 }
 
+// BRX table words are offsets from the program base, so for graphics stages they include the 0x80-byte
+// shader header; the native address map is indexed by instruction number (offset from instruction 0).
+static u32 NativeBranchOffset(u32 address, u32 header_size) {
+    return address >= header_size && (address - header_size) % 16 == 0 ? address - header_size : address;
+}
+
 u32 GenericEnvironment::TranslateProgramAddress(u32 address) const {
-    if (const auto translated = Shader::Ampere::NativeProgramAddress(code, address)) return *translated;
+    if (const auto translated = Shader::Ampere::NativeProgramAddress(
+            code, NativeBranchOffset(address, native_source_header_size))) return *translated;
     if (native_source_size || Shader::Ampere::HasNativeAddressMap(code))
         throw Shader::RuntimeError("Invalid native indirect branch address {:#x}", address);
     return address;
@@ -1008,7 +1015,11 @@ bool FileEnvironment::HasNativeRegisterCopies() const {
 }
 
 u32 FileEnvironment::TranslateProgramAddress(u32 address) const {
-    if (const auto translated = Shader::Ampere::NativeProgramAddress(code, address)) return *translated;
+    // native_source_header_size is only serialized for ampere_program entries; derive it from the stage.
+    const u32 header_size = native_source_header_size ? native_source_header_size
+                            : stage == Shader::Stage::Compute ? 0 : 128;
+    if (const auto translated = Shader::Ampere::NativeProgramAddress(
+            code, NativeBranchOffset(address, header_size))) return *translated;
     if (!ampere_program.empty() || Shader::Ampere::HasNativeAddressMap(code))
         throw Shader::RuntimeError("Invalid cached native indirect branch address {:#x}", address);
     return address;

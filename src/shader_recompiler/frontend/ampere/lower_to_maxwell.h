@@ -1184,12 +1184,15 @@ inline LoweredProgram LowerToMaxwell(std::span<const Instruction> code,
             const u32 high = insn.Bits(64, 8);
             const u32 source = uniform_register(insn.words[1]), carrier = uniform_register(high);
             // Bit 76 selects USHF.R.W.U32.HI: Ud = Uc >> (Us & 31).
-            const bool right = insn.words[2] == (0x08011e00U | high);
+            const bool right_wrap = insn.words[2] == (0x08011e00U | high);
+            // 0x1600: R.U32.HI without .W, i.e. Maxwell SHR.U32 (amount >= 32 gives 0).
+            const bool right_clamp = insn.words[2] == (0x08011600U | high);
+            const bool right = right_wrap || right_clamp;
             if (insn.Bits(24, 8) != 63 || (insn.words[2] != (0x08010e00U | high) && !right) || dest >= 63 ||
                 insn.words[1] >= 64 || source == ~0U || carrier == ~0U || native_predicate != 7)
                 return fail(index, "native uniform shift mode");
             emit((right ? 0x5c28000000070000ULL : 0x5c48000000070000ULL) | uniform_register(static_cast<u32>(dest)) | (u64{carrier} << 8) |
-                 (u64{source} << 20) | (u64{1} << 39));
+                 (u64{source} << 20) | (right_clamp ? 0ULL : (u64{1} << 39)));
             break;
         }
         case 0x882: { // UMOV immediate.
@@ -1207,13 +1210,13 @@ inline LoweredProgram LowerToMaxwell(std::span<const Instruction> code,
         case 0xab9: case 0xabb: { // ULDC U32/U64, direct or indexed.
             const u32 uniform_dest = insn.Bits(16, 8), index_reg = insn.Bits(24, 8);
             const u32 width = insn.Bits(73, 3);
-            if (uniform_dest >= 63 || (width != 4 && width != 5) ||
+            if (uniform_dest >= 63 || width > 5 ||
                 (width == 5 && ((uniform_dest & 1) || uniform_dest >= 62)) ||
-                insn.Bits(38, 16) % 4 || insn.Bits(62, 2) ||
+                insn.Bits(38, 16) % (width < 2 ? 1U : width < 4 ? 2U : 4U) || insn.Bits(62, 2) ||
                 (insn.words[2] & ~0xe00U) != (opcode == 0xab9 ? 0U : 0x08000000U) ||
                 (opcode == 0xabb && index_reg >= 63))
                 return fail(index, "native uniform constant load mode");
-            if (opcode == 0xab9 && width == 4) {
+            if (opcode == 0xab9 && width == 4) { // 32-bit direct: plain MOV from the bank
                 emit(0x4c98000000000000ULL | predicate | (uniform_register(uniform_dest)) | (u64{15} << 39) | cbuf());
             } else {
                 emit(0xef90000000000000ULL | predicate | (uniform_register(uniform_dest)) |
@@ -1764,7 +1767,7 @@ inline LoweredProgram LowerToMaxwell(std::span<const Instruction> code,
             const u32 width = insn.Bits(73, 3);
             const bool sized_store = opcode == 0x986 &&
                 (insn.words[2] & ~(0x3fU | 0xe00U)) == 0x0c101100 &&
-                (width == 0 || width == 2 || width == 4 || width == 5);
+                (width == 0 || width == 2 || width == 4 || width == 5 || width == 6);
             // 8/16-bit stores (U8/S8/U16/S16) keep their width; Maxwell STG encodes it the same way.
             const bool narrow = !sized_store && width < 4;
             if (!sized_store && !narrow && (width < 4 || width > 6 || (data == 255 ? false :
@@ -1772,6 +1775,8 @@ inline LoweredProgram LowerToMaxwell(std::span<const Instruction> code,
                 return fail(index, "native global store width/register range");
             if (sized_store && width == 5 && ((data & 1) || data + 2 > reserved_register))
                 return fail(index, "native global store data pair");
+            if (sized_store && width == 6 && ((data & 3) || data + 4 > reserved_register))
+                return fail(index, "native global store data quad");
             if (opcode == 0x986) {
                 const u32 uniform_address = uniform_register(insn.Bits(64, 6));
                 if ((!sized_store && (insn.words[2] & ~(0x04000000U | 0x3fU)) != (0x0810a100U | (width << 9))) ||
@@ -3175,11 +3180,12 @@ inline LoweredProgram LowerToMaxwell(std::span<const Instruction> code,
                 break;
             }
             if (insn.Bits(72, 1) || insn.Bits(74, 1) || insn.Bits(80, 1) ||
-                insn.Bits(62, 2))
+                insn.Bits(62, 1))
                 return fail(index, "native constant LEA carry mode");
             const u32 b = operand(1, false);
+            // Bit 63 negates the constant (LEA Rd, Ra, -c[..], s), as Maxwell ISCADD's bit 48.
             emit(base(0x5c18000000000000ULL) | (u64{insn.Bits(24, 8)} << 8) |
-                (u64{b} << 20) | (u64{insn.Bits(75, 5)} << 39));
+                (u64{b} << 20) | (u64{insn.Bits(75, 5)} << 39) | (u64{insn.Bits(63, 1)} << 48));
             if (insn.Bits(81, 3) != 7) emit(0x5b60000000000000ULL | predicate | 7 | (u64{insn.Bits(81, 3)} << 3) |
                 (dest << 8) | (u64{b} << 20) | (u64{7} << 39) | (u64{1} << 49));
             break;
