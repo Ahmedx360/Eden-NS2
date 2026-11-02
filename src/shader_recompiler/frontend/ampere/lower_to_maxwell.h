@@ -1189,9 +1189,10 @@ inline LoweredProgram LowerToMaxwell(std::span<const Instruction> code,
             const bool right_clamp = insn.words[2] == (0x08011600U | high);
             const bool right = right_wrap || right_clamp;
             if (insn.Bits(24, 8) != 63 || (insn.words[2] != (0x08010e00U | high) && !right) || dest >= 63 ||
-                insn.words[1] >= 64 || source == ~0U || carrier == ~0U || native_predicate != 7)
+                insn.words[1] >= 64 || source == ~0U || carrier == ~0U)
                 return fail(index, "native uniform shift mode");
-            emit((right ? 0x5c28000000070000ULL : 0x5c48000000070000ULL) | uniform_register(static_cast<u32>(dest)) | (u64{carrier} << 8) |
+            // Uniform registers are per-thread in the lowered program, so the execution predicate carries over.
+            emit((right ? 0x5c28000000000000ULL : 0x5c48000000000000ULL) | predicate | uniform_register(static_cast<u32>(dest)) | (u64{carrier} << 8) |
                  (u64{source} << 20) | (right_clamp ? 0ULL : (u64{1} << 39)));
             break;
         }
@@ -2727,13 +2728,17 @@ inline LoweredProgram LowerToMaxwell(std::span<const Instruction> code,
         case 0x387: case 0x983: { // Scalar local spills with register-relative byte offsets.
             const bool store = opcode == 0x387;
             const u32 data = store ? insn.Bits(32, 8) : static_cast<u32>(dest);
+            // Bit 9 selects the 64-bit form (register pair), otherwise 32-bit.
+            const bool pair = (insn.words[2] & 0x200U) != 0;
+            const u32 control = insn.words[2] & ~0x200U;
             if ((store && insn.Bits(16, 8)) || (!store && insn.Bits(32, 8)) ||
                 (data >= reserved_register && data != 255) ||
-                (insn.Bits(40, 24) & 3) ||
-                (insn.words[2] != 0x00100800U && (store || insn.words[2] != 0x00300800U)))
+                (pair && data != 255 && ((data & 1) || data + 2 > reserved_register)) ||
+                (insn.Bits(40, 24) & (pair ? 7U : 3U)) ||
+                (control != 0x00100800U && (store || control != 0x00300800U)))
                 return fail(index, "native local scalar spill mode");
             emit((store ? 0xef50000000000000ULL : 0xef40000000000000ULL) | predicate |
-                 data | (u64{insn.Bits(24, 8)} << 8) | (u64{insn.Bits(40, 24)} << 20) | (u64{4} << 48));
+                 data | (u64{insn.Bits(24, 8)} << 8) | (u64{insn.Bits(40, 24)} << 20) | (u64{pair ? 5U : 4U} << 48));
             break;
         }
         case 0x883: { // UP2UR with UP0 selected and a zero merge source.
@@ -3134,7 +3139,8 @@ inline LoweredProgram LowerToMaxwell(std::span<const Instruction> code,
                 }
                 break;
             }
-            if ((insn.Bits(73, 2) != 3 && !is_signed) || insn.Bits(75, 1) || !insn.Bits(80, 1) || insn.words[1] > 32) return fail(index, "native funnel-shift mode");
+            // Type 1 is .U64: its HI word of a 64-bit shift is the same funnel result for these shifts.
+            if ((insn.Bits(73, 2) != 3 && insn.Bits(73, 2) != 1 && !is_signed) || insn.Bits(75, 1) || !insn.Bits(80, 1) || insn.words[1] > 32) return fail(index, "native funnel-shift mode");
             const u32 low = insn.Bits(24, 8), high = insn.Bits(64, 8), shift = insn.words[1];
             if (insn.Bits(76, 1)) {
                 if (low != 255) return fail(index, "native nonzero low right-shift word");
