@@ -593,15 +593,19 @@ inline LoweredProgram LowerToMaxwell(std::span<const Instruction> code,
             }
             break;
         }
-        case 0x434: { // HSETP2.GEU.AND, packed immediate and independent half predicates.
-            constexpr u32 variable = (0x3fU << 17) | (3U << 10);
-            if (insn.Bits(16, 8) || (insn.words[2] & ~variable) != 0x0380e000U ||
-                (insn.Bits(74, 2) != 0 && insn.Bits(74, 2) != 2))
+        case 0x234: case 0x434: { // HSETP2.<cmp>.AND, packed register/immediate and independent half predicates.
+            // Bits 76-79 select the comparison (nvdisasm: GEU = 14, GT = 4), bit 73 is |a|.
+            constexpr u32 variable = (0x3fU << 17) | (3U << 10) | 0x200U | 0xf000U;
+            if (insn.Bits(16, 8) || (insn.words[2] & ~variable) != 0x03800000U ||
+                (insn.Bits(74, 2) != 0 && insn.Bits(74, 2) != 2) ||
+                (opcode == 0x234 && (insn.words[1] & 0x0fffff00U)))
                 return fail(index, "native packed half predicate mode");
-            const auto a = half_source(0), b = half_source(2);
+            const auto a = half_source(0), b = half_source(opcode == 0x234 ? 1 : 2);
             emit(0x5d20000000000000ULL | predicate | (u64{insn.Bits(81, 3)} << 3) |
                  insn.Bits(84, 3) | (u64{a.reg} << 8) | (u64{b.reg} << 20) |
-                 (u64{14} << 35) | (u64{7} << 39) | (u64{a.swizzle} << 47));
+                 (u64{b.swizzle} << 28) | (u64{b.absolute} << 30) | (u64{b.negate} << 31) |
+                 (u64{insn.Bits(76, 4)} << 35) | (u64{7} << 39) | (u64{a.negate} << 43) |
+                 (u64{a.absolute} << 44) | (u64{a.swizzle} << 47));
             break;
         }
         case 0x233: case 0x433: case 0x633: { // HSET2, packed half comparisons and predicate combination.
@@ -3204,8 +3208,12 @@ inline LoweredProgram LowerToMaxwell(std::span<const Instruction> code,
         case 0x211: case 0x811: case 0xc11: { // LEA with a register, immediate, or uniform base.
             if (opcode == 0xc11 && ((insn.words[1] & ~0xffU) || !insn.Bits(91, 1)))
                 return fail(index, "native uniform effective address mode");
-            if (opcode == 0x211 && !(insn.words[1] & ~0xffU) && (insn.words[2] & ~(0x0780f800U | 0xffU)) == 0x000f0400U && !insn.Bits(62, 2)) {
-                const u32 base_high = insn.Bits(32, 8);
+            // 0xc11 is the same operation with a uniform register Rb (bit 91 set); operand(1) resolves it.
+            const bool lea_register_b = opcode == 0x211 || opcode == 0xc11;
+            const u32 lea_uniform_bit = opcode == 0xc11 ? 0x08000000U : 0U;
+            if (lea_register_b && !(insn.words[1] & ~0xffU) &&
+                (insn.words[2] & ~(0x0780f800U | 0xffU | lea_uniform_bit)) == 0x000f0400U && !insn.Bits(62, 2)) {
+                const u32 base_high = opcode == 0xc11 ? operand(1, false) : insn.Bits(32, 8);
                 emit(0x36f8000000000000ULL | predicate | 250 | (u64{insn.Bits(24, 8)} << 8) |
                      (u64{insn.Bits(64, 8)} << 39) | (u64{insn.Bits(75, 5)} << 20));
                 mov_imm(252, 1);
@@ -3215,9 +3223,9 @@ inline LoweredProgram LowerToMaxwell(std::span<const Instruction> code,
                 emit(base(0x5c10000000000000ULL) | (dest << 8) | (u64{252} << 20));
                 break;
             }
-            if (opcode == 0x211 && (insn.words[2] & ~(0x07800000U | 0x0000f800U)) == 0x000f06ff &&
+            if (lea_register_b && (insn.words[2] & ~(0x07800000U | 0x0000f800U | lea_uniform_bit)) == 0x000f06ff &&
                 !(insn.words[1] & ~0xffU)) {
-                const u32 a = insn.Bits(24, 8), b = insn.Bits(32, 8);
+                const u32 a = insn.Bits(24, 8), b = opcode == 0xc11 ? operand(1, false) : insn.Bits(32, 8);
                 emit(0x3828000000000000ULL | predicate | 250 | (u64{a} << 8) |
                      (u64{32 - insn.Bits(75, 5)} << 20) | (u64{1} << 48));
                 mov_imm(252, 1);
@@ -3238,9 +3246,10 @@ inline LoweredProgram LowerToMaxwell(std::span<const Instruction> code,
                     (u64{b} << 20));
                 break;
             }
-            if (opcode == 0x211 && (insn.words[2] & ~0x000ef800U) == 0x078000ffU &&
+            if (lea_register_b && (insn.words[2] & ~(0x000ef800U | lea_uniform_bit)) == 0x078000ffU &&
                 !(insn.words[1] & ~0xffU) && insn.Bits(81, 3) != 7) {
-                emit(0x5c98000000000000ULL | predicate | 252 | (u64{insn.Bits(32, 8)} << 20) | (u64{15} << 39));
+                const u32 carry_b = opcode == 0xc11 ? operand(1, false) : insn.Bits(32, 8);
+                emit(0x5c98000000000000ULL | predicate | 252 | (u64{carry_b} << 20) | (u64{15} << 39));
                 const u32 target = dest == 255 ? 250U : static_cast<u32>(dest);
                 emit(0x5c18000000000000ULL | predicate | target | (u64{insn.Bits(24, 8)} << 8) |
                      (u64{252} << 20) | (u64{insn.Bits(75, 5)} << 39));
